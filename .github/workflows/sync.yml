@@ -1,0 +1,55 @@
+name: Sync mirror
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo with full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream
+        run: |
+          git remote remove upstream || true
+          git remote add upstream https://sourceware.org/git/newlib-cygwin.git
+          git fetch --prune upstream '+refs/heads/*:refs/remotes/upstream/*' '+refs/tags/*:refs/tags/*'
+
+      - name: Update mirror-base to upstream master
+        run: |
+          git checkout -B mirror-base upstream/master
+          git push --force origin mirror-base
+
+      - name: Rebuild main with local overlay
+        run: |
+          git checkout main
+          git reset --hard mirror-base
+          git checkout mirror-config .github/workflows/sync.yml README.md
+          git add .github/workflows/sync.yml README.md
+          git commit -m "Restore mirror workflow and notice" || true
+          git push --force origin main
+
+      - name: Mirror other branches
+        run: |
+          for ref in $(git for-each-ref --format='%(refname:strip=3)' refs/remotes/upstream); do
+            if [ "$ref" != "master" ]; then
+              git push --force origin "refs/remotes/upstream/$ref:refs/heads/$ref"
+            fi
+          done
+
+      - name: Push tags
+        run: |
+          git push --force --tags origin
