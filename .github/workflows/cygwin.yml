@@ -324,7 +324,7 @@ jobs:
       run: |
         export PATH=/usr/bin:$(cygpath ${SYSTEMROOT})/system32
         uname -a
-        git clone https://cygwin.com/git/cygwin-apps/stc.git --depth 1
+        git clone git://cygwin.com/git/cygwin-apps/stc.git --depth 1
         meson setup _build stc
         ninja -C _build
       shell: bash --noprofile --norc -o igncr -eo pipefail '{0}'
