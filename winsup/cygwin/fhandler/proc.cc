@@ -442,7 +442,7 @@ format_proc_loadavg (void *, char *&destbuf)
   winpids pids ((DWORD) 0);
 
   for (unsigned i = 0; i < pids.npids; i++)
-    switch (get_process_state (i)) {
+    switch (get_process_state (pids[i]->dwProcessId)) {
       case 'O':
       case 'R':
 	running++;
