@@ -1,0 +1,95 @@
+name: Sync mirror
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-mirror
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Configure SSH deploy key
+        env:
+          MIRROR_SSH_KEY: ${{ secrets.SVC_CESW_TEP_EXT }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$MIRROR_SSH_KEY" > ~/.ssh/mirror_key
+          chmod 600 ~/.ssh/mirror_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<'EOF'
+          Host github.com
+            IdentityFile ~/.ssh/mirror_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+          EOF
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream and fetch
+        run: |
+          git remote remove upstream || true
+          git remote add upstream https://sourceware.org/git/newlib-cygwin.git
+          git fetch --prune upstream +refs/heads/*:refs/remotes/upstream/* +refs/tags/*:refs/tags/*
+
+      - name: Detect upstream default branch
+        id: upstream
+        run: |
+          if git show-ref --verify --quiet refs/remotes/upstream/master; then
+            echo "ref=refs/remotes/upstream/master" >> "$GITHUB_OUTPUT"
+            echo "name=master" >> "$GITHUB_OUTPUT"
+          elif git show-ref --verify --quiet refs/remotes/upstream/main; then
+            echo "ref=refs/remotes/upstream/main" >> "$GITHUB_OUTPUT"
+            echo "name=main" >> "$GITHUB_OUTPUT"
+          else
+            echo "Could not determine upstream default branch"
+            exit 1
+          fi
+
+      - name: Save local workflow overlay
+        run: |
+          mkdir -p /tmp/overlay/.github/workflows
+          cp .github/workflows/sync.yml /tmp/overlay/.github/workflows/sync.yml
+
+      - name: Mirror non-default branches except main
+        run: |
+          default_branch="${{ steps.upstream.outputs.name }}"
+          while read -r branch; do
+            if [ "$branch" != "$default_branch" ] && [ "$branch" != "main" ]; then
+              git push --force git@github.com:${{ github.repository }}.git "refs/remotes/upstream/$branch:refs/heads/$branch"
+            fi
+          done < <(git for-each-ref --format='%(refname:strip=3)' refs/remotes/upstream)
+
+      - name: Mirror tags
+        run: |
+          git push --force git@github.com:${{ github.repository }}.git refs/tags/*:refs/tags/*
+
+      - name: Rebuild main from upstream default plus local workflow
+        run: |
+          git checkout --force -B main "${{ steps.upstream.outputs.ref }}"
+          rm -f .github/workflows/cygwin.yml
+          mkdir -p .github/workflows
+          cp /tmp/overlay/.github/workflows/sync.yml .github/workflows/sync.yml
+          git add .github/workflows/sync.yml
+          git rm -f .github/workflows/cygwin.yml || true
+          git commit -m "Restore mirror workflow overlay" || true
+          git push --force git@github.com:${{ github.repository }}.git main
